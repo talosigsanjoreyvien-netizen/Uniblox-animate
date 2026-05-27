@@ -1,10 +1,10 @@
-package com.example.ui
+package `fun`.cybercode.simplyvisuals.uniblox_animate.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
-import com.example.data.*
+import `fun`.cybercode.simplyvisuals.uniblox_animate.data.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -101,7 +101,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             val id = dao.insertProject(Project(name = name))
             _currentProjectId.value = id
             // Add default tracks
-            dao.insertTrack(TimelineTrack(projectId = id, name = "Animation", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 1", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 2", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 3", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "GIF Layer", type = TrackType.GIF))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Audio", type = TrackType.AUDIO))
         }
     }
@@ -127,6 +130,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     content = sceneId.toString()
                 ))
             }
+        }
+    }
+
+    fun addGif(trackId: Long, gifUri: String) {
+        viewModelScope.launch {
+            val track = tracks.value.find { it.id == trackId } ?: return@launch
+            val startTime = clips.value
+                .filter { it.trackId == trackId }
+                .maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
+
+            dao.insertClip(TimelineClip(
+                trackId = trackId,
+                startTimeMs = startTime,
+                durationMs = 2000L,
+                content = gifUri
+            ))
         }
     }
 
@@ -169,6 +188,25 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch {
                 dao.updateFrame(frame)
             }
+        }
+    }
+
+    fun updateClipDuration(clipId: Long, newDurationMs: Long) {
+        viewModelScope.launch {
+            val allClips = clips.value
+            val targetClip = allClips.find { it.id == clipId } ?: return@launch
+            
+            val durationChange = newDurationMs - targetClip.durationMs
+            if (durationChange == 0L) return@launch
+
+            // Update target clip
+            dao.updateClip(targetClip.copy(durationMs = newDurationMs))
+
+            // Shift subsequent clips in the same track
+            allClips.filter { it.trackId == targetClip.trackId && it.startTimeMs > targetClip.startTimeMs }
+                .forEach { clip ->
+                    dao.updateClip(clip.copy(startTimeMs = clip.startTimeMs + durationChange))
+                }
         }
     }
 }

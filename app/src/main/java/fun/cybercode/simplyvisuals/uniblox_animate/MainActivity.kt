@@ -1,4 +1,4 @@
-package com.example
+package `fun`.cybercode.simplyvisuals.uniblox_animate
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -13,10 +13,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import com.example.ui.StudioAnimator
-import com.example.ui.StudioDashboard
-import com.example.ui.StudioViewModel
-import com.example.ui.theme.StudioTheme
+import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioAnimator
+import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioDashboard
+import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioViewModel
+import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme.StudioTheme
 import kotlinx.serialization.Serializable
 
 @Serializable

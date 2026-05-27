@@ -1,4 +1,4 @@
-package com.example
+package `fun`.cybercode.simplyvisuals.uniblox_animate
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider

@@ -1,4 +1,4 @@
-package com.example.ui
+package `fun`.cybercode.simplyvisuals.uniblox_animate.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -30,9 +30,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.Point
-import com.example.data.Stroke as DrawingStroke
-import com.example.ui.theme.*
+import `fun`.cybercode.simplyvisuals.uniblox_animate.data.Point
+import `fun`.cybercode.simplyvisuals.uniblox_animate.data.Stroke as DrawingStroke
+import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -349,7 +349,7 @@ fun FrameThumb(index: Int, isSelected: Boolean, isCompact: Boolean, onClick: () 
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOnionFrame(frame: com.example.data.Frame, tint: Color) {
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOnionFrame(frame: `fun`.cybercode.simplyvisuals.uniblox_animate.data.Frame, tint: Color) {
     try {
         val strokes: List<DrawingStroke> = Json.decodeFromString(frame.strokesJson)
         strokes.forEach { stroke ->

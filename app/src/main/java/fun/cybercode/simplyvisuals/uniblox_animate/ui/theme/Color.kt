@@ -1,4 +1,4 @@
-package com.example.ui.theme
+package `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

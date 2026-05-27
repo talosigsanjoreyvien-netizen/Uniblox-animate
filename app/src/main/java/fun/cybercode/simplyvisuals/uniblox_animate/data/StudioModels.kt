@@ -1,4 +1,4 @@
-package com.example.data
+package `fun`.cybercode.simplyvisuals.uniblox_animate.data
 
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
@@ -80,7 +80,7 @@ data class TimelineTrack(
     val type: TrackType
 )
 
-enum class TrackType { SCENE, AUDIO }
+enum class TrackType { SCENE, AUDIO, GIF }
 
 @Entity(
     tableName = "timeline_clips",
@@ -136,6 +136,9 @@ interface StudioDao {
 
     @Insert
     suspend fun insertClip(clip: TimelineClip): Long
+
+    @Update
+    suspend fun updateClip(clip: TimelineClip)
 }
 
 @Database(

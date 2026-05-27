@@ -1,4 +1,4 @@
-package com.example
+package `fun`.cybercode.simplyvisuals.uniblox_animate
 
 import org.junit.Assert.*
 import org.junit.Test
