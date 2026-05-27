@@ -51,6 +51,7 @@ fun StudioAnimator(
     var selectedColor by remember { mutableStateOf(Color.White) }
     var strokeWidth by remember { mutableFloatStateOf(5f) }
     var isEraser by remember { mutableStateOf(false) }
+    var isPerfecting by remember { mutableStateOf(true) }
 
     // Load strokes when frame changes
     LaunchedEffect(selectedIndex, frames) {
@@ -124,7 +125,14 @@ fun StudioAnimator(
                     verticalArrangement = Arrangement.spacedBy(if (isCompact) 8.dp else 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ToolIcon(Icons.Default.Edit, !isEraser) { isEraser = false }
+                    ToolIcon(Icons.Default.Edit, !isEraser && !isPerfecting) { 
+                        isEraser = false
+                        isPerfecting = false
+                    }
+                    ToolIcon(Icons.Default.AutoAwesome, isPerfecting && !isEraser) {
+                        isEraser = false
+                        isPerfecting = true
+                    }
                     ToolIcon(Icons.Default.AutoFixNormal, isEraser) { isEraser = true }
                     
                     Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 16.dp))
@@ -153,8 +161,15 @@ fun StudioAnimator(
                                 },
                                 onDragEnd = {
                                     val color = if (isEraser) Color.White else selectedColor
+                                    val rawPoints = currentPoints.toList()
+                                    val finalPoints = if (isPerfecting && !isEraser) {
+                                        perfectStroke(rawPoints)
+                                    } else {
+                                        rawPoints
+                                    }
+                                    
                                     val newStroke = DrawingStroke(
-                                        points = currentPoints.toList(),
+                                        points = finalPoints,
                                         color = color.toArgb(),
                                         width = strokeWidth
                                     )
@@ -319,3 +334,54 @@ fun Color.toArgb(): Int = (this.alpha * 255).toInt() shl 24 or
         ((this.red * 255).toInt() shl 16) or
         ((this.green * 255).toInt() shl 8) or
         (this.blue * 255).toInt()
+
+private fun perfectStroke(points: List<Point>): List<Point> {
+    if (points.size < 5) return points
+
+    // 1. Line Straightening logic
+    val start = points.first()
+    val end = points.last()
+    
+    // Calculate total path length
+    var totalLength = 0.0
+    for (i in 0 until points.size - 1) {
+        val dx = points[i+1].x - points[i].x
+        val dy = points[i+1].y - points[i].y
+        totalLength += Math.sqrt((dx * dx + dy * dy).toDouble())
+    }
+    
+    // Calculate straight line distance
+    val ldx = end.x - start.x
+    val ldy = end.y - start.y
+    val linearDist = Math.sqrt((ldx * ldx + ldy * ldy).toDouble())
+
+    // If the path is nearly straight, snap it to a line
+    if (linearDist > 0 && (totalLength / linearDist) < 1.1) {
+        return listOf(start, end)
+    }
+
+    // 2. Curves Perfecting logic (Laplacian Smoothing)
+    val smoothed = mutableListOf<Point>()
+    smoothed.add(points.first())
+    
+    // Iterative smoothing (2 passes for "perfect" curves)
+    var currentPass = points
+    repeat(2) {
+        val nextPass = mutableListOf<Point>()
+        nextPass.add(currentPass.first())
+        for (i in 1 until currentPass.size - 1) {
+            val prev = currentPass[i - 1]
+            val curr = currentPass[i]
+            val next = currentPass[i + 1]
+            // Weighted average
+            nextPass.add(Point(
+                x = (prev.x + curr.x * 2f + next.x) / 4f,
+                y = (prev.y + curr.y * 2f + next.y) / 4f
+            ))
+        }
+        nextPass.add(currentPass.last())
+        currentPass = nextPass
+    }
+    
+    return currentPass
+}
