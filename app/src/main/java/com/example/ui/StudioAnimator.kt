@@ -16,14 +16,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.Point
@@ -45,13 +49,18 @@ fun StudioAnimator(
         viewModel.selectScene(sceneId)
     }
 
+    val configuration = LocalConfiguration.current
+    val isTablet = configuration.screenWidthDp >= 600
+    val defaultPenColor = if (isTablet) Color.Black else Color(0xFF444444) // Darker gray
+
     var currentStrokes by remember { mutableStateOf(listOf<DrawingStroke>()) }
     var redoStrokes by remember { mutableStateOf(listOf<DrawingStroke>()) }
     var currentPoints = remember { mutableStateListOf<Point>() }
-    var selectedColor by remember { mutableStateOf(Color.White) }
+    var selectedColor by remember { mutableStateOf(defaultPenColor) }
     var strokeWidth by remember { mutableFloatStateOf(5f) }
     var isEraser by remember { mutableStateOf(false) }
-    var isPerfecting by remember { mutableStateOf(true) }
+    var isPerfecting by remember { mutableStateOf(true) } // Default to ON
+    var onionSkinEnabled by remember { mutableStateOf(true) }
 
     // Load strokes when frame changes
     LaunchedEffect(selectedIndex, frames) {
@@ -113,6 +122,14 @@ fun StudioAnimator(
                 }) {
                     Icon(Icons.Default.Redo, contentDescription = "Redo", tint = Color.White)
                 }
+
+                IconButton(onClick = { onionSkinEnabled = !onionSkinEnabled }) {
+                    Icon(
+                        imageVector = if (onionSkinEnabled) Icons.Default.Layers else Icons.Default.LayersClear,
+                        contentDescription = "Onion Skin",
+                        tint = if (onionSkinEnabled) StudioAccent else Color.White
+                    )
+                }
             }
 
             Row(modifier = Modifier.weight(1f)) {
@@ -125,18 +142,31 @@ fun StudioAnimator(
                     verticalArrangement = Arrangement.spacedBy(if (isCompact) 8.dp else 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ToolIcon(Icons.Default.Edit, !isEraser && !isPerfecting) { 
+                    ToolIcon(Icons.Default.Edit, !isEraser && !isPerfecting, "Pen") { 
                         isEraser = false
                         isPerfecting = false
                     }
-                    ToolIcon(Icons.Default.AutoAwesome, isPerfecting && !isEraser) {
+                    ToolIcon(Icons.Default.AutoAwesome, isPerfecting && !isEraser, "Magic") {
                         isEraser = false
                         isPerfecting = true
                     }
-                    ToolIcon(Icons.Default.AutoFixNormal, isEraser) { isEraser = true }
+                    ToolIcon(Icons.Default.AutoFixNormal, isEraser, "Eraser") { isEraser = true }
                     
                     Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 16.dp))
+
+                    // Stroke Width Indicator/Slider Area (Vertical slider would be better, but horizontal for now)
+                    Text("Size", color = White60, fontSize = 10.sp)
+                    Slider(
+                        value = strokeWidth,
+                        onValueChange = { strokeWidth = it },
+                        valueRange = 1f..50f,
+                        modifier = Modifier.width(40.dp).graphicsLayer(rotationZ = -90f)
+                    )
                     
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    ColorCircle(Color.Black, selectedColor == Color.Black) { selectedColor = Color.Black }
+                    ColorCircle(Color.Gray, selectedColor == Color.Gray) { selectedColor = Color.Gray }
                     ColorCircle(Color.White, selectedColor == Color.White) { selectedColor = Color.White }
                     ColorCircle(Color.Red, selectedColor == Color.Red) { selectedColor = Color.Red }
                     ColorCircle(Color.Green, selectedColor == Color.Green) { selectedColor = Color.Green }
@@ -150,6 +180,7 @@ fun StudioAnimator(
                         .fillMaxHeight()
                         .padding(8.dp)
                         .background(Color.White, RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(8.dp)) // Correctly clip to rounded paper shape
                         .pointerInput(isEraser, selectedColor, strokeWidth) {
                             detectDragGestures(
                                 onDragStart = { offset ->
@@ -182,31 +213,15 @@ fun StudioAnimator(
                         }
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        // Onion Skin (Previous Frame)
-                        if (selectedIndex > 0 && selectedIndex - 1 < frames.size) {
-                            val prevStrokesJson = frames[selectedIndex - 1].strokesJson
-                            try {
-                                val prevStrokes: List<DrawingStroke> = Json.decodeFromString(prevStrokesJson)
-                                prevStrokes.forEach { stroke ->
-                                    val path = Path().apply {
-                                        if (stroke.points.isNotEmpty()) {
-                                            moveTo(stroke.points[0].x, stroke.points[0].y)
-                                            for (i in 1 until stroke.points.size) {
-                                                lineTo(stroke.points[i].x, stroke.points[i].y)
-                                            }
-                                        }
-                                    }
-                                    drawPath(
-                                        path = path,
-                                        color = Color(stroke.color).copy(alpha = 0.2f),
-                                        style = Stroke(
-                                            width = stroke.width,
-                                            cap = StrokeCap.Round,
-                                            join = StrokeJoin.Round
-                                        )
-                                    )
-                                }
-                            } catch (e: Exception) {}
+                        if (onionSkinEnabled) {
+                            // Onion Skin (Previous Frame - Red tint)
+                            if (selectedIndex > 0 && selectedIndex - 1 < frames.size) {
+                                drawOnionFrame(frames[selectedIndex - 1], Color.Red.copy(alpha = 0.15f))
+                            }
+                            // Onion Skin (Next Frame - Green tint)
+                            if (selectedIndex + 1 < frames.size) {
+                                drawOnionFrame(frames[selectedIndex + 1], Color.Green.copy(alpha = 0.15f))
+                            }
                         }
 
                         // Current Strokes
@@ -294,14 +309,18 @@ fun StudioAnimator(
 }
 
 @Composable
-fun ToolIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, isSelected: Boolean, onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier
-            .background(if (isSelected) StudioAccent else Color.Transparent, CircleShape)
-            .border(1.dp, White60, CircleShape)
-    ) {
-        Icon(icon, contentDescription = null, tint = if (isSelected) Color.Black else Color.White)
+fun ToolIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, isSelected: Boolean, label: String, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(if (isSelected) 40.dp else 36.dp)
+                .background(if (isSelected) StudioAccent else Color.Transparent, CircleShape)
+                .border(1.dp, White60, CircleShape)
+        ) {
+            Icon(icon, contentDescription = label, tint = if (isSelected) Color.Black else Color.White)
+        }
+        Text(text = label, color = White60, fontSize = 8.sp)
     }
 }
 
@@ -328,6 +347,31 @@ fun FrameThumb(index: Int, isSelected: Boolean, isCompact: Boolean, onClick: () 
     ) {
         Text(text = "${index + 1}", color = Color.White)
     }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOnionFrame(frame: com.example.data.Frame, tint: Color) {
+    try {
+        val strokes: List<DrawingStroke> = Json.decodeFromString(frame.strokesJson)
+        strokes.forEach { stroke ->
+            val path = Path().apply {
+                if (stroke.points.isNotEmpty()) {
+                    moveTo(stroke.points[0].x, stroke.points[0].y)
+                    for (i in 1 until stroke.points.size) {
+                        lineTo(stroke.points[i].x, stroke.points[i].y)
+                    }
+                }
+            }
+            drawPath(
+                path = path,
+                color = tint,
+                style = Stroke(
+                    width = stroke.width,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+        }
+    } catch (e: Exception) {}
 }
 
 fun Color.toArgb(): Int = (this.alpha * 255).toInt() shl 24 or

@@ -5,13 +5,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.PauseCircleFilled
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,13 +25,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawScopeStroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.drawWithContent
 import com.example.data.Frame
+import com.example.data.Point
+import com.example.data.Stroke as DrawingStroke
 import com.example.data.TimelineClip
 import com.example.data.TrackType
 import com.example.ui.theme.*
@@ -47,10 +55,12 @@ fun StudioDashboard(
     val playbackPositionMs by viewModel.playbackPositionMs.collectAsState()
 
     // Auto-create/select project if none
+    var isCreatingInitialProject by remember { mutableStateOf(false) }
     LaunchedEffect(projects) {
-        if (projects.isEmpty()) {
+        if (projects.isEmpty() && !isCreatingInitialProject) {
+            isCreatingInitialProject = true
             viewModel.createProject("My First Project")
-        } else if (currentProject == null) {
+        } else if (projects.isNotEmpty() && currentProject == null) {
             viewModel.selectProject(projects.first().id)
         }
     }
@@ -78,6 +88,7 @@ fun StudioDashboard(
                     modifier = Modifier.weight(1f),
                     scenes = scenes,
                     clips = clips,
+                    isPlaying = isPlaying,
                     playbackPositionMs = playbackPositionMs,
                     viewModel = viewModel,
                     onOpenAnimator = onOpenAnimator,
@@ -170,6 +181,7 @@ fun MainPreviewArea(
     modifier: Modifier = Modifier,
     scenes: List<com.example.data.Scene>,
     clips: List<TimelineClip>,
+    isPlaying: Boolean,
     playbackPositionMs: Long,
     viewModel: StudioViewModel,
     onOpenAnimator: (Long) -> Unit,
@@ -202,8 +214,7 @@ fun MainPreviewArea(
             val frames = currentFramesState.value
             if (frames.isNotEmpty()) {
                 val timeInClip = playbackPositionMs - activeClip.startTimeMs
-                val progress = timeInClip.toFloat() / activeClip.durationMs
-                val frameIndex = (progress * frames.size).toInt().coerceIn(0, frames.size - 1)
+                val frameIndex = (timeInClip * StudioViewModel.FPS / 1000).toInt().coerceIn(0, frames.size - 1)
                 
                 Surface(
                     modifier = Modifier
@@ -215,7 +226,28 @@ fun MainPreviewArea(
                     FrameView(frames[frameIndex])
                 }
 
-                Box(modifier = Modifier.fillMaxSize().clickable { onOpenAnimator(sceneId) })
+                // Play/Pause Overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { viewModel.togglePlayback() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!isPlaying) {
+                        Surface(
+                            modifier = Modifier.size(80.dp),
+                            color = Color.Black.copy(alpha = 0.3f),
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(48.dp).padding(16.dp)
+                            )
+                        }
+                    }
+                }
             } else {
                 CircularProgressIndicator(color = StudioAccent)
             }
@@ -237,7 +269,7 @@ fun MainPreviewArea(
 fun FrameView(frame: Frame) {
     val strokes = remember(frame.strokesJson) {
         try {
-            Json.decodeFromString<List<com.example.data.Stroke>>(frame.strokesJson)
+            Json.decodeFromString<List<DrawingStroke>>(frame.strokesJson)
         } catch (e: Exception) {
             emptyList()
         }
@@ -256,7 +288,7 @@ fun FrameView(frame: Frame) {
             drawPath(
                 path = path,
                 color = Color(stroke.color),
-                style = Stroke(
+                style = DrawScopeStroke(
                     width = stroke.width,
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
@@ -325,83 +357,135 @@ fun TimelineArea(
         // Play Button Column
         Column(
             modifier = Modifier
-                .width(80.dp)
+                .width(100.dp)
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            IconButton(onClick = onTogglePlayback) {
+            IconButton(
+                onClick = onTogglePlayback,
+                modifier = Modifier.size(72.dp)
+            ) {
                 Icon(
-                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    imageVector = if (isPlaying) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled,
                     contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = White87,
-                    modifier = Modifier.size(64.dp)
+                    tint = StudioAccent,
+                    modifier = Modifier.fillMaxSize()
                 )
             }
+            Text(
+                text = if (isPlaying) "STOP" else "PLAY",
+                color = StudioAccent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
 
         VerticalDivider(color = White60)
 
         // Tracks Area
-        Box(modifier = Modifier.weight(1f)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize()
+        val scrollState = rememberScrollState()
+        val timelineContentWidth = 2000.dp // Fixed width for now, or calculate based on duration
+
+        Column(modifier = Modifier.weight(1f)) {
+            // 1. Time Ruler (Interactive Seeking Area)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+                    .background(White60.copy(alpha = 0.1f))
+                    .horizontalScroll(scrollState)
             ) {
-                items(tracks) { track ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(40.dp)
-                            .border(0.5.dp, White60),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${tracks.indexOf(track) + 1}",
-                            color = White60,
-                            modifier = Modifier.width(30.dp),
-                            textAlign = TextAlign.Center
-                        )
-                        VerticalDivider(color = White60)
-                        
-                        // Track Content
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            val trackClips = clips.filter { it.trackId == track.id }
-                            trackClips.forEach { clip ->
-                                val sceneName = scenes.find { it.id.toString() == clip.content }?.name ?: "scene"
-                                TimelineClipView(
-                                    label = sceneName,
-                                    color = if (track.type == TrackType.SCENE) StudioAccent else StudioAudio,
-                                    modifier = Modifier
-                                        .padding(start = (clip.startTimeMs / 10f).dp)
-                                        .width((clip.durationMs / 10f).dp)
-                                ) {
-                                    if (track.type == TrackType.SCENE) {
-                                        clip.content.toLongOrNull()?.let { onOpenAnimator(it) }
-                                    }
-                                }
+                Box(
+                    modifier = Modifier
+                        .width(timelineContentWidth)
+                        .fillMaxHeight()
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                onSeek((offset.x.toDp().value * 10).toLong())
+                            }
+                        }
+                ) {
+                    // Time markers
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val stepPx = 100.dp.toPx() // Every 1 second
+                        for (i in 0..100) {
+                            val x = i * stepPx
+                            drawLine(
+                                color = White87,
+                                start = androidx.compose.ui.geometry.Offset(x, size.height * 0.6f),
+                                end = androidx.compose.ui.geometry.Offset(x, size.height),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                            if (i % 5 == 0) {
+                                // Larger marker every 5 seconds
+                                drawLine(
+                                    color = White87,
+                                    start = androidx.compose.ui.geometry.Offset(x, size.height * 0.3f),
+                                    end = androidx.compose.ui.geometry.Offset(x, size.height),
+                                    strokeWidth = 2.dp.toPx()
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // Playhead
-            Canvas(
+            // 2. Clips Area
+            Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            onSeek((offset.x.toDp().value * 10).toLong())
-                        }
+                    .weight(1f)
+                    .horizontalScroll(scrollState)
+                    .drawWithContent {
+                        drawContent()
+                        // Playhead (Visual Only - drawn over content)
+                        val x = (playbackPositionMs / 10f).dp.toPx()
+                        drawLine(
+                            color = StudioAccent,
+                            start = androidx.compose.ui.geometry.Offset(x, 0f),
+                            end = androidx.compose.ui.geometry.Offset(x, size.height),
+                            strokeWidth = 2.dp.toPx()
+                        )
                     }
             ) {
-                val x = (playbackPositionMs / 10f).dp.toPx()
-                drawLine(
-                    color = StudioAccent,
-                    start = androidx.compose.ui.geometry.Offset(x, 0f),
-                    end = androidx.compose.ui.geometry.Offset(x, size.height),
-                    strokeWidth = 2.dp.toPx()
-                )
+                Column(modifier = Modifier.width(timelineContentWidth).fillMaxHeight()) {
+                    tracks.forEach { track ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .border(0.5.dp, White60),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${tracks.indexOf(track) + 1}",
+                                color = White60,
+                                modifier = Modifier.width(30.dp),
+                                textAlign = TextAlign.Center
+                            )
+                            VerticalDivider(color = White60)
+                            
+                            // Track Content
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                                val trackClips = clips.filter { it.trackId == track.id }
+                                trackClips.forEach { clip ->
+                                    val sceneName = scenes.find { it.id.toString() == clip.content }?.name ?: "scene"
+                                    TimelineClipView(
+                                        label = sceneName,
+                                        color = if (track.type == TrackType.SCENE) StudioAccent else StudioAudio,
+                                        modifier = Modifier
+                                            .padding(start = (clip.startTimeMs / 10f).dp)
+                                            .width((clip.durationMs / 10f).dp)
+                                    ) {
+                                        if (track.type == TrackType.SCENE) {
+                                            clip.content.toLongOrNull()?.let { onOpenAnimator(it) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -416,18 +500,25 @@ fun TimelineClipView(
 ) {
     Surface(
         modifier = modifier
-            .height(28.dp)
-            .background(color.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+            .height(36.dp)
             .clickable { onClick() },
-        color = Color.Transparent,
-        border = borderStroke(1.dp, color),
-        shape = RoundedCornerShape(4.dp)
+        color = color.copy(alpha = 0.4f),
+        border = borderStroke(2.dp, color),
+        shape = RoundedCornerShape(6.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = label, color = Color.White, fontSize = 10.sp, maxLines = 1)
+            Text(
+                text = label, 
+                color = Color.White, 
+                fontSize = 11.sp, 
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

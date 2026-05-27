@@ -9,6 +9,10 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        const val FPS = 12
+    }
+    
     private val db = Room.databaseBuilder(
         application,
         StudioDatabase::class.java, "studio-db"
@@ -76,7 +80,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     startPlayback()
                     break
                 }
-                kotlinx.coroutines.delay(16) // ~60fps
+                kotlinx.coroutines.delay(1000L / FPS)
             }
         }
     }
