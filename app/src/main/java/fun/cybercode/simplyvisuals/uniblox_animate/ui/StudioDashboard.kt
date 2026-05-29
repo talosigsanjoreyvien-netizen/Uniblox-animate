@@ -46,6 +46,20 @@ import android.os.Build
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.filled.Refresh
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import coil.decode.VideoFrameDecoder
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.*
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.Stroke as DrawingStroke
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme.*
@@ -123,6 +137,7 @@ fun StudioDashboard(
                     modifier = Modifier.width(sidebarWidth),
                     tracks = tracks,
                     selectedTrackId = selectedTrackId,
+                    viewModel = viewModel,
                     onAddScene = {
                         currentProject?.id?.let { viewModel.addScene(it, selectedTrackId, "scene ${scenes.size + 1}") }
                     },
@@ -224,6 +239,7 @@ fun MainPreviewArea(
     val imageLoader = remember {
         ImageLoader.Builder(context)
             .components {
+                add(VideoFrameDecoder.Factory())
                 if (Build.VERSION.SDK_INT >= 28) {
                     add(ImageDecoderDecoder.Factory())
                 } else {
@@ -288,6 +304,14 @@ fun MainPreviewArea(
                                     model = activeClip.content,
                                     contentDescription = "GIF Layer",
                                     imageLoader = imageLoader,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            TrackType.VIDEO -> {
+                                VideoPlayer(
+                                    uri = activeClip.content,
+                                    playbackPositionMs = playbackPositionMs - activeClip.startTimeMs,
+                                    isPlaying = isPlaying,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -386,10 +410,66 @@ fun ActionsSidebar(
     modifier: Modifier = Modifier,
     tracks: List<TimelineTrack>,
     selectedTrackId: Long?,
+    viewModel: StudioViewModel,
     onAddScene: () -> Unit,
     onAddGif: (Long) -> Unit
 ) {
+    var activeTab by remember { mutableStateOf("actions") }
     val selectedTrackIndex = tracks.indexOfFirst { it.id == selectedTrackId }
+    val currentProject by viewModel.currentProject.collectAsState()
+    val context = LocalContext.current
+    var showGifLibrary by remember { mutableStateOf(false) }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            try {
+                context.contentResolver.openInputStream(it)?.use { stream ->
+                    val json = stream.bufferedReader().readText()
+                    viewModel.importProject(json)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    val gifPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            selectedTrackId?.let { trackId ->
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {}
+                viewModel.addGif(trackId, it.toString())
+            }
+        }
+    }
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            selectedTrackId?.let { trackId ->
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {}
+                viewModel.addGif(trackId, it.toString()) // Reusing logic for now
+            }
+        }
+    }
+
+    if (showGifLibrary) {
+        GifLibraryDialog(
+            onDismiss = { showGifLibrary = false },
+            onSelectGif = { url ->
+                selectedTrackId?.let { trackId ->
+                    viewModel.addGif(trackId, url)
+                }
+                showGifLibrary = false
+            },
+            onUploadClick = {
+                gifPickerLauncher.launch("image/gif")
+                showGifLibrary = false
+            }
+        )
+    }
     
     Column(
         modifier = modifier
@@ -399,24 +479,97 @@ fun ActionsSidebar(
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = if (selectedTrackIndex != -1) "Layer ${selectedTrackIndex + 1} selected" else "no layer selected",
-            color = if (selectedTrackIndex != -1) StudioAccent else Color.Red,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        ActionButton("add a scene") {
-            onAddScene()
+        Row(
+            modifier = Modifier.fillMaxWidth().height(32.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            TabButton("Layers", activeTab == "actions", modifier = Modifier.weight(1f)) { activeTab = "actions" }
+            TabButton("File", activeTab == "file", modifier = Modifier.weight(1f)) { activeTab = "file" }
         }
-        
-        ActionButton("add a gif") { 
-            selectedTrackId?.let { onAddGif(it) }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (activeTab == "actions") {
+            Text(
+                text = if (selectedTrackIndex != -1) "Layer ${selectedTrackIndex + 1} selected" else "no layer selected",
+                color = if (selectedTrackIndex != -1) StudioAccent else Color.Red,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            ActionButton("add a scene") {
+                onAddScene()
+            }
+            
+            ActionButton("add a gif") { 
+                showGifLibrary = true
+            }
+            
+            ActionButton("add a video") {
+                videoPickerLauncher.launch("video/*")
+            }
+            
+            val picturePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+                uri?.let {
+                    selectedTrackId?.let { trackId ->
+                        try {
+                            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (e: Exception) {}
+                        viewModel.addGif(trackId, it.toString()) // Reusing addGif logic as it handles URIs the same way
+                    }
+                }
+            }
+
+            ActionButton("add a picture") {
+                picturePickerLauncher.launch("image/*")
+            }
+        } else {
+            Text(
+                text = "Project Management",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            ActionButton("Import Project") {
+                importLauncher.launch("application/json")
+            }
+            
+            ActionButton("Export Project") {
+                currentProject?.id?.let { id ->
+                    viewModel.exportProject(id) { json ->
+                        if (json != null) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/json"
+                                putExtra(Intent.EXTRA_TEXT, json)
+                                putExtra(Intent.EXTRA_SUBJECT, "Project Export")
+                            }
+                            context.startActivity(Intent.createChooser(intent, "Export Project"))
+                        }
+                    }
+                }
+            }
         }
-        
-        ActionButton("add a picture") {}
+    }
+}
+
+@Composable
+fun TabButton(text: String, isSelected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        modifier = modifier
+            .fillMaxHeight()
+            .clickable { onClick() },
+        color = if (isSelected) StudioAccent.copy(alpha = 0.2f) else Color.Transparent,
+        shape = RoundedCornerShape(4.dp),
+        border = if (isSelected) borderStroke(1.dp, StudioAccent) else borderStroke(1.dp, White60)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(text = text, color = if (isSelected) StudioAccent else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -439,6 +592,130 @@ fun ActionButton(text: String, onClick: () -> Unit) {
 
 @Composable
 fun borderStroke(width: androidx.compose.ui.unit.Dp, color: Color) = androidx.compose.foundation.BorderStroke(width, color)
+
+@Composable
+fun GifLibraryDialog(
+    onDismiss: () -> Unit,
+    onSelectGif: (String) -> Unit,
+    onUploadClick: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("GIF Library", color = Color.White) },
+        containerColor = StudioPanel,
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().height(400.dp)) {
+                Button(
+                    onClick = onUploadClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = StudioAccent, contentColor = Color.Black)
+                ) {
+                    Icon(Icons.Default.Upload, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Upload from Device")
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                Text("Sample Library", color = White60, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(SAMPLE_GIFS) { gifUrl ->
+                        Card(
+                            modifier = Modifier
+                                .aspectRatio(1f)
+                                .clickable { onSelectGif(gifUrl) },
+                            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.3f)),
+                            border = borderStroke(1.dp, White60)
+                        ) {
+                            AsyncImage(
+                                model = gifUrl,
+                                contentDescription = "Sample GIF",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = StudioAccent)
+            }
+        }
+    )
+}
+
+val SAMPLE_GIFS = listOf(
+    // Explosions & Effects
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/oe33H3BZiXC0w/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/l41lTfuxV5F6T2vNC/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/H7Z6J1X9uWf9C/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKVUn7iM8FMEU24/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKDkDbIDJieKbVm/giphy.gif",
+    // Characters & Fun
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/10mgM03wGisGf6/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o6Zt481isEjwzo88g/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/5GoVLqeAOoJJ2/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/cuHjncTuHW40g/giphy.gif",
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHprazR6NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4NXExbjB4JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/12zfAjyQ3RZNSw/giphy.gif"
+)
+
+@Composable
+fun VideoPlayer(
+    uri: String,
+    playbackPositionMs: Long,
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+            playWhenReady = isPlaying
+            val mediaItem = MediaItem.fromUri(uri)
+            setMediaItem(mediaItem)
+            prepare()
+        }
+    }
+
+    // Sync playback state
+    LaunchedEffect(isPlaying) {
+        exoPlayer.playWhenReady = isPlaying
+    }
+
+    // Sync position (roughly)
+    LaunchedEffect(playbackPositionMs) {
+        // Only seek if we are far off to avoid jitter
+        val current = exoPlayer.currentPosition
+        if (Math.abs(current - playbackPositionMs) > 100) {
+            exoPlayer.seekTo(playbackPositionMs)
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    AndroidView(
+        factory = {
+            PlayerView(context).apply {
+                player = exoPlayer
+                useController = false
+            }
+        },
+        modifier = modifier
+    )
+}
 
 @Composable
 fun TimelineArea(
@@ -594,6 +871,8 @@ fun TimelineArea(
                                     scenes.find { it.id.toString() == clip.content }?.name ?: "scene"
                                 } else if (track.type == TrackType.GIF) {
                                     "gif clip"
+                                } else if (track.type == TrackType.VIDEO) {
+                                    "video clip"
                                 } else {
                                     "audio"
                                 }

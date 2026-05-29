@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.*
 import `fun`.cybercode.simplyvisuals.uniblox_animate.service.RecoveryService
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -146,6 +149,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 4", type = TrackType.SCENE))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 5", type = TrackType.SCENE))
             dao.insertTrack(TimelineTrack(projectId = id, name = "GIF Layer", type = TrackType.GIF))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Video Layer", type = TrackType.VIDEO))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Audio", type = TrackType.AUDIO))
         }
     }
@@ -250,6 +254,64 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 .forEach { clip ->
                     dao.updateClip(clip.copy(startTimeMs = clip.startTimeMs + durationChange))
                 }
+        }
+    }
+
+    fun exportProject(projectId: Long, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val project = projects.value.find { it.id == projectId } ?: return@launch
+                val scenes = dao.getScenesByProjectSync(projectId)
+                val sceneWithFrames = scenes.map { scene ->
+                    SceneWithFrames(scene, dao.getFramesBySceneSync(scene.id))
+                }
+                val tracks = dao.getTracksByProjectSync(projectId)
+                val trackWithClips = tracks.map { track ->
+                    TrackWithClips(track, dao.getClipsByTrackSync(track.id))
+                }
+                val data = ProjectData(project, sceneWithFrames, trackWithClips)
+                val json = Json.encodeToString(data)
+                onResult(json)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                onResult(null)
+            }
+        }
+    }
+
+    fun importProject(json: String) {
+        viewModelScope.launch {
+            try {
+                val data = Json.decodeFromString<ProjectData>(json)
+                // 1. Insert Project (new ID)
+                val newProjectId = dao.insertProject(data.project.copy(id = 0, name = "${data.project.name} (Imported)"))
+                
+                // 2. Map old IDs to new IDs for Scenes
+                val sceneIdMap = mutableMapOf<Long, Long>()
+                data.scenes.forEach { swf ->
+                    val newSceneId = dao.insertScene(swf.scene.copy(id = 0, projectId = newProjectId))
+                    sceneIdMap[swf.scene.id] = newSceneId
+                    swf.frames.forEach { frame ->
+                        dao.insertFrame(frame.copy(id = 0, sceneId = newSceneId))
+                    }
+                }
+                
+                // 3. Map old IDs for Tracks and then Clips
+                data.tracks.forEach { twc ->
+                    val newTrackId = dao.insertTrack(twc.track.copy(id = 0, projectId = newProjectId))
+                    twc.clips.forEach { clip ->
+                        val newContent = if (twc.track.type == TrackType.SCENE) {
+                            sceneIdMap[clip.content.toLongOrNull() ?: -1L]?.toString() ?: clip.content
+                        } else {
+                            clip.content
+                        }
+                        dao.insertClip(clip.copy(id = 0, trackId = newTrackId, content = newContent))
+                    }
+                }
+                _currentProjectId.value = newProjectId
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+@Serializable
 @Entity(tableName = "projects")
 data class Project(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -13,6 +14,7 @@ data class Project(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Serializable
 @Entity(
     tableName = "scenes",
     foreignKeys = [
@@ -32,6 +34,7 @@ data class Scene(
     val sequence: Int
 )
 
+@Serializable
 @Entity(
     tableName = "frames",
     foreignKeys = [
@@ -62,6 +65,7 @@ data class Stroke(
 @Serializable
 data class Point(val x: Float, val y: Float)
 
+@Serializable
 @Entity(
     tableName = "timeline_tracks",
     foreignKeys = [
@@ -81,8 +85,9 @@ data class TimelineTrack(
     val type: TrackType
 )
 
-enum class TrackType { SCENE, AUDIO, GIF }
+enum class TrackType { SCENE, AUDIO, GIF, VIDEO }
 
+@Serializable
 @Entity(
     tableName = "timeline_clips",
     foreignKeys = [
@@ -101,6 +106,25 @@ data class TimelineClip(
     val startTimeMs: Long,
     val durationMs: Long,
     val content: String // sceneId or audioUri
+)
+
+@Serializable
+data class ProjectData(
+    val project: Project,
+    val scenes: List<SceneWithFrames>,
+    val tracks: List<TrackWithClips>
+)
+
+@Serializable
+data class SceneWithFrames(
+    val scene: Scene,
+    val frames: List<Frame>
+)
+
+@Serializable
+data class TrackWithClips(
+    val track: TimelineTrack,
+    val clips: List<TimelineClip>
 )
 
 @Entity(tableName = "recovery_session")
@@ -161,6 +185,18 @@ interface StudioDao {
 
     @Query("DELETE FROM recovery_session WHERE id = 1")
     suspend fun clearRecoverySession()
+
+    @Query("SELECT * FROM timeline_tracks WHERE projectId = :projectId")
+    suspend fun getTracksByProjectSync(projectId: Long): List<TimelineTrack>
+
+    @Query("SELECT * FROM timeline_clips WHERE trackId = :trackId")
+    suspend fun getClipsByTrackSync(trackId: Long): List<TimelineClip>
+
+    @Query("SELECT * FROM scenes WHERE projectId = :projectId")
+    suspend fun getScenesByProjectSync(projectId: Long): List<Scene>
+
+    @Query("SELECT * FROM frames WHERE sceneId = :sceneId")
+    suspend fun getFramesBySceneSync(sceneId: Long): List<Frame>
 }
 
 @Database(
