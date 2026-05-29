@@ -6,7 +6,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -37,19 +43,36 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // Request overlay permission if needed for the recovery feature
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-        }
-
         setContent {
             StudioTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val viewModel: StudioViewModel = viewModel()
+                    var showPermissionDialog by remember { mutableStateOf(!Settings.canDrawOverlays(this@MainActivity)) }
+
+                    if (showPermissionDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showPermissionDialog = false },
+                            title = { Text("Permission Needed") },
+                            text = { Text("To enable 'Automatic Crash Recovery' and show the recovery dialog over other apps (like after a device restart), please enable 'Draw over other apps'.\n\nInstructions:\n1. Click 'Go to Settings'.\n2. Find 'Uniblox Animate' in the list.\n3. Toggle 'Allow display over other apps' ON.") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showPermissionDialog = false
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:$packageName")
+                                    )
+                                    startActivity(intent)
+                                }) {
+                                    Text("Go to Settings")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showPermissionDialog = false }) {
+                                    Text("Not Now")
+                                }
+                            }
+                        )
+                    }
                     
                     LaunchedEffect(Unit) {
                         viewModel.checkAndShowRecovery(this@MainActivity)
