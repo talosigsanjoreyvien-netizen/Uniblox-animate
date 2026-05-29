@@ -25,7 +25,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import android.graphics.Paint
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
@@ -35,6 +41,8 @@ import `fun`.cybercode.simplyvisuals.uniblox_animate.data.Stroke as DrawingStrok
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+enum class DrawingTool { PEN, MAGIC, ERASER, FILL }
 
 @Composable
 fun StudioAnimator(
@@ -47,20 +55,29 @@ fun StudioAnimator(
 
     LaunchedEffect(sceneId) {
         viewModel.selectScene(sceneId)
+        viewModel.startRecoverySession(sceneId, selectedIndex)
+    }
+
+    LaunchedEffect(selectedIndex) {
+        viewModel.updateRecoverySession(selectedIndex)
     }
 
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp >= 600
     val defaultPenColor = if (isTablet) Color.Black else Color(0xFF444444) // Darker gray
+    val defaultPenSize = if (isTablet) 8f else 6f
 
     var currentStrokes by remember { mutableStateOf(listOf<DrawingStroke>()) }
     var redoStrokes by remember { mutableStateOf(listOf<DrawingStroke>()) }
     var currentPoints = remember { mutableStateListOf<Point>() }
     var selectedColor by remember { mutableStateOf(defaultPenColor) }
-    var strokeWidth by remember { mutableFloatStateOf(5f) }
-    var isEraser by remember { mutableStateOf(false) }
-    var isPerfecting by remember { mutableStateOf(true) } // Default to ON
+    var strokeWidth by remember { mutableFloatStateOf(defaultPenSize) }
+    var activeTool by remember { mutableStateOf(DrawingTool.PEN) }
     var onionSkinEnabled by remember { mutableStateOf(true) }
+    var showColorPicker by remember { mutableStateOf(false) }
+
+    var zoomScale by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
 
     // Load strokes when frame changes
     LaunchedEffect(selectedIndex, frames) {
@@ -97,6 +114,7 @@ fun StudioAnimator(
             ) {
                 IconButton(onClick = { 
                     saveStrokes()
+                    viewModel.clearRecoverySession()
                     onBack() 
                 }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
@@ -130,6 +148,21 @@ fun StudioAnimator(
                         tint = if (onionSkinEnabled) StudioAccent else Color.White
                     )
                 }
+
+                VerticalDivider(modifier = Modifier.height(24.dp).padding(horizontal = 4.dp), color = White60)
+
+                IconButton(onClick = { zoomScale *= 1.25f }) {
+                    Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White)
+                }
+                IconButton(onClick = { zoomScale /= 1.25f }) {
+                    Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White)
+                }
+                IconButton(onClick = { 
+                    zoomScale = 1f
+                    panOffset = Offset.Zero
+                }) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Reset Zoom", tint = Color.White)
+                }
             }
 
             Row(modifier = Modifier.weight(1f)) {
@@ -142,35 +175,65 @@ fun StudioAnimator(
                     verticalArrangement = Arrangement.spacedBy(if (isCompact) 8.dp else 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ToolIcon(Icons.Default.Edit, !isEraser && !isPerfecting, "Pen") { 
-                        isEraser = false
-                        isPerfecting = false
+                    ToolIcon(Icons.Default.Edit, activeTool == DrawingTool.PEN, "Pen") { 
+                        activeTool = DrawingTool.PEN
                     }
-                    ToolIcon(Icons.Default.AutoAwesome, isPerfecting && !isEraser, "Magic") {
-                        isEraser = false
-                        isPerfecting = true
+                    ToolIcon(Icons.Default.AutoAwesome, activeTool == DrawingTool.MAGIC, "Magic") {
+                        activeTool = DrawingTool.MAGIC
                     }
-                    ToolIcon(Icons.Default.AutoFixNormal, isEraser, "Eraser") { isEraser = true }
+                    ToolIcon(Icons.Default.FormatColorFill, activeTool == DrawingTool.FILL, "Fill") {
+                        activeTool = DrawingTool.FILL
+                    }
+                    ToolIcon(Icons.Default.AutoFixNormal, activeTool == DrawingTool.ERASER, "Eraser") { 
+                        activeTool = DrawingTool.ERASER 
+                    }
                     
                     Spacer(modifier = Modifier.height(if (isCompact) 8.dp else 16.dp))
 
-                    // Stroke Width Indicator/Slider Area (Vertical slider would be better, but horizontal for now)
+                    // Stroke Width Indicator/Slider Area
                     Text("Size", color = White60, fontSize = 10.sp)
+                    
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        listOf(4f, 8f, 16f, 32f).forEach { size ->
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(if (strokeWidth == size) StudioAccent else Color.Transparent)
+                                    .border(1.dp, White60, CircleShape)
+                                    .clickable { strokeWidth = size },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size((size / 2).coerceIn(2f, 18f).dp)
+                                        .background(Color.White, CircleShape)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     Slider(
                         value = strokeWidth,
                         onValueChange = { strokeWidth = it },
-                        valueRange = 1f..50f,
-                        modifier = Modifier.width(40.dp).graphicsLayer(rotationZ = -90f)
+                        valueRange = 1f..64f,
+                        modifier = Modifier.width(60.dp).graphicsLayer(rotationZ = -90f)
                     )
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    ColorCircle(Color.Black, selectedColor == Color.Black) { selectedColor = Color.Black }
-                    ColorCircle(Color.Gray, selectedColor == Color.Gray) { selectedColor = Color.Gray }
-                    ColorCircle(Color.White, selectedColor == Color.White) { selectedColor = Color.White }
-                    ColorCircle(Color.Red, selectedColor == Color.Red) { selectedColor = Color.Red }
-                    ColorCircle(Color.Green, selectedColor == Color.Green) { selectedColor = Color.Green }
-                    ColorCircle(Color.Blue, selectedColor == Color.Blue) { selectedColor = Color.Blue }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(selectedColor, CircleShape)
+                            .border(2.dp, Color.White, CircleShape)
+                            .clickable { showColorPicker = true }
+                    )
                 }
 
                 // Canvas Area
@@ -179,89 +242,111 @@ fun StudioAnimator(
                         .weight(1f)
                         .fillMaxHeight()
                         .padding(8.dp)
-                        .background(Color.White, RoundedCornerShape(8.dp))
-                        .clip(RoundedCornerShape(8.dp)) // Correctly clip to rounded paper shape
-                        .pointerInput(isEraser, selectedColor, strokeWidth) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    currentPoints.clear()
-                                    currentPoints.add(Point(offset.x, offset.y))
-                                },
-                                onDrag = { change, _ ->
-                                    currentPoints.add(Point(change.position.x, change.position.y))
-                                },
-                                onDragEnd = {
-                                    val color = if (isEraser) Color.White else selectedColor
-                                    val rawPoints = currentPoints.toList()
-                                    val finalPoints = if (isPerfecting && !isEraser) {
-                                        perfectStroke(rawPoints)
-                                    } else {
-                                        rawPoints
-                                    }
-                                    
-                                    val newStroke = DrawingStroke(
-                                        points = finalPoints,
-                                        color = color.toArgb(),
-                                        width = strokeWidth
-                                    )
-                                    currentStrokes = currentStrokes + newStroke
-                                    redoStrokes = emptyList()
-                                    currentPoints.clear()
-                                    saveStrokes()
-                                }
-                            )
-                        }
+                        .clipToBounds(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        if (onionSkinEnabled) {
-                            // Onion Skin (Previous Frame - Red tint)
-                            if (selectedIndex > 0 && selectedIndex - 1 < frames.size) {
-                                drawOnionFrame(frames[selectedIndex - 1], Color.Red.copy(alpha = 0.15f))
-                            }
-                            // Onion Skin (Next Frame - Green tint)
-                            if (selectedIndex + 1 < frames.size) {
-                                drawOnionFrame(frames[selectedIndex + 1], Color.Green.copy(alpha = 0.15f))
-                            }
-                        }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(1.6f) // 16:10 for 1050p height
+                            .graphicsLayer(
+                                scaleX = zoomScale,
+                                scaleY = zoomScale,
+                                translationX = panOffset.x,
+                                translationY = panOffset.y
+                            )
+                            .background(Color.White, RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp)) // Correctly clip to rounded paper shape
+                            .pointerInput(activeTool, selectedColor, strokeWidth) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        currentPoints.clear()
+                                        currentPoints.add(Point(offset.x, offset.y))
+                                    },
+                                    onDrag = { change, _ ->
+                                        currentPoints.add(Point(change.position.x, change.position.y))
+                                    },
+                                    onDragEnd = {
+                                        val color = if (activeTool == DrawingTool.ERASER) Color.White else selectedColor
+                                        val rawPoints = currentPoints.toList()
+                                        val finalPoints = if (activeTool == DrawingTool.MAGIC) {
+                                            perfectStroke(rawPoints)
+                                        } else {
+                                            rawPoints
+                                        }
+                                        
+                                        // Auto-close for fill
+                                        val pointsToSave = if (activeTool == DrawingTool.FILL && finalPoints.size > 2) {
+                                            finalPoints + finalPoints.first()
+                                        } else {
+                                            finalPoints
+                                        }
 
-                        // Current Strokes
-                        currentStrokes.forEach { stroke ->
-                            val path = Path().apply {
-                                if (stroke.points.isNotEmpty()) {
-                                    moveTo(stroke.points[0].x, stroke.points[0].y)
-                                    for (i in 1 until stroke.points.size) {
-                                        lineTo(stroke.points[i].x, stroke.points[i].y)
+                                        val newStroke = DrawingStroke(
+                                            points = pointsToSave,
+                                            color = color.toArgb(),
+                                            width = strokeWidth,
+                                            isFill = activeTool == DrawingTool.FILL
+                                        )
+                                        currentStrokes = currentStrokes + newStroke
+                                        redoStrokes = emptyList()
+                                        currentPoints.clear()
+                                        saveStrokes()
+                                    }
+                                )
+                            }
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            if (onionSkinEnabled) {
+                                // Onion Skin (Previous Frame - Red tint)
+                                if (selectedIndex > 0 && selectedIndex - 1 < frames.size) {
+                                    drawOnionFrame(frames[selectedIndex - 1], Color.Red.copy(alpha = 0.15f))
+                                }
+                                // Onion Skin (Next Frame - Green tint)
+                                if (selectedIndex + 1 < frames.size) {
+                                    drawOnionFrame(frames[selectedIndex + 1], Color.Green.copy(alpha = 0.15f))
+                                }
+                            }
+
+                            // Current Strokes
+                            currentStrokes.forEach { stroke ->
+                                val path = Path().apply {
+                                    if (stroke.points.isNotEmpty()) {
+                                        moveTo(stroke.points[0].x, stroke.points[0].y)
+                                        for (i in 1 until stroke.points.size) {
+                                            lineTo(stroke.points[i].x, stroke.points[i].y)
+                                        }
                                     }
                                 }
-                            }
-                            drawPath(
-                                path = path,
-                                color = Color(stroke.color),
-                                style = Stroke(
-                                    width = stroke.width,
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
+                                drawPath(
+                                    path = path,
+                                    color = Color(stroke.color),
+                                    style = if (stroke.isFill) Fill else Stroke(
+                                        width = stroke.width,
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round
+                                    )
                                 )
-                            )
-                        }
+                            }
 
-                        // In-progress Stroke
-                        if (currentPoints.isNotEmpty()) {
-                            val path = Path().apply {
-                                moveTo(currentPoints[0].x, currentPoints[0].y)
-                                for (i in 1 until currentPoints.size) {
-                                    lineTo(currentPoints[i].x, currentPoints[i].y)
+                            // In-progress Stroke
+                            if (currentPoints.isNotEmpty()) {
+                                val path = Path().apply {
+                                    moveTo(currentPoints[0].x, currentPoints[0].y)
+                                    for (i in 1 until currentPoints.size) {
+                                        lineTo(currentPoints[i].x, currentPoints[i].y)
+                                    }
                                 }
-                            }
-                            drawPath(
-                                path = path,
-                                color = if (isEraser) Color.White else selectedColor,
-                                style = Stroke(
-                                    width = strokeWidth,
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
+                                drawPath(
+                                    path = path,
+                                    color = if (activeTool == DrawingTool.ERASER) Color.White else selectedColor,
+                                    style = if (activeTool == DrawingTool.FILL) Fill else Stroke(
+                                        width = strokeWidth,
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
                 }
@@ -283,7 +368,7 @@ fun StudioAnimator(
                         contentPadding = PaddingValues(horizontal = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        itemsIndexed(frames) { index, frame ->
+                        itemsIndexed(frames, key = { _, frame -> frame.id }) { index, frame ->
                             FrameThumb(
                                 index = index,
                                 isSelected = index == selectedIndex,
@@ -304,6 +389,165 @@ fun StudioAnimator(
                     }
                 }
             }
+        if (showColorPicker) {
+            ColorPickerDialog(
+                initialColor = selectedColor,
+                onDismiss = { showColorPicker = false },
+                onColorSelected = { 
+                    selectedColor = it
+                    showColorPicker = false
+                }
+            )
+        }
+    }
+}
+}
+
+@Composable
+fun ColorPickerDialog(
+    initialColor: Color,
+    onDismiss: () -> Unit,
+    onColorSelected: (Color) -> Unit
+) {
+    var currentColor by remember { mutableStateOf(initialColor) }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = StudioPanel,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Select Color", color = Color.White, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Color Wheel / Hue Slider and Saturation/Value Area
+                ColorPickerBox(
+                    modifier = Modifier
+                        .size(200.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    onColorChange = { currentColor = it }
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(currentColor, CircleShape)
+                            .border(2.dp, Color.White, CircleShape)
+                    )
+                    
+                    Column {
+                        Text("R: ${(currentColor.red * 255).toInt()}", color = White60, fontSize = 12.sp)
+                        Text("G: ${(currentColor.green * 255).toInt()}", color = White60, fontSize = 12.sp)
+                        Text("B: ${(currentColor.blue * 255).toInt()}", color = White60, fontSize = 12.sp)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = White60)
+                    }
+                    Button(
+                        onClick = { onColorSelected(currentColor) },
+                        colors = ButtonDefaults.buttonColors(containerColor = StudioAccent)
+                    ) {
+                        Text("Select", color = Color.Black)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ColorPickerBox(
+    modifier: Modifier = Modifier,
+    onColorChange: (Color) -> Unit
+) {
+    var hue by remember { mutableFloatStateOf(0f) }
+    var saturation by remember { mutableFloatStateOf(1f) }
+    var value by remember { mutableFloatStateOf(1f) }
+
+    Column(modifier = modifier) {
+        // Saturation-Value Box
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectDragGestures { change, _ ->
+                        saturation = (change.position.x / size.width).coerceIn(0f, 1f)
+                        value = 1f - (change.position.y / size.height).coerceIn(0f, 1f)
+                        onColorChange(Color.hsv(hue, saturation, value))
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val hsvPaint = Paint().apply {
+                    isAntiAlias = true
+                }
+                
+                // Draw Saturation/Value gradient
+                // This is a simplification. For a real one we'd need more complex gradients.
+                drawRect(color = Color.hsv(hue, 1f, 1f))
+                
+                // Add Saturation and Value gradients
+                val saturationOverlay = Brush.horizontalGradient(listOf(Color.White, Color.Transparent))
+                drawRect(brush = saturationOverlay)
+                
+                val valueOverlay = Brush.verticalGradient(listOf(Color.Transparent, Color.Black))
+                drawRect(brush = valueOverlay)
+                
+                // Selector circle
+                drawCircle(
+                    color = Color.White,
+                    radius = 8.dp.toPx(),
+                    center = Offset(saturation * size.width, (1f - value) * size.height),
+                    style = Stroke(width = 2.dp.toPx())
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // Hue Slider
+        Box(
+            modifier = Modifier
+                .height(20.dp)
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectDragGestures { change, _ ->
+                        hue = (change.position.x / size.width).coerceIn(0f, 360f)
+                        onColorChange(Color.hsv(hue, saturation, value))
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val hues = (0..360 step 60).map { Color.hsv(it.toFloat(), 1f, 1f) }
+                drawRect(brush = Brush.horizontalGradient(hues))
+                
+                // Selector
+                drawRect(
+                    color = Color.White,
+                    topLeft = Offset((hue / 360f) * size.width - 2.dp.toPx(), 0f),
+                    size = size.copy(width = 4.dp.toPx()),
+                    style = Stroke(width = 1.dp.toPx())
+                )
+            }
         }
     }
 }
@@ -322,17 +566,6 @@ fun ToolIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, isSelected: 
         }
         Text(text = label, color = White60, fontSize = 8.sp)
     }
-}
-
-@Composable
-fun ColorCircle(color: Color, isSelected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .background(color, CircleShape)
-            .border(if (isSelected) 3.dp else 1.dp, if (isSelected) StudioAccent else White60, CircleShape)
-            .clickable { onClick() }
-    )
 }
 
 @Composable

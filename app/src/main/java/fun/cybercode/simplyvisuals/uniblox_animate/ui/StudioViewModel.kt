@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.*
+import `fun`.cybercode.simplyvisuals.uniblox_animate.service.RecoveryService
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -16,9 +17,47 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val db = Room.databaseBuilder(
         application,
         StudioDatabase::class.java, "studio-db"
-    ).build()
+    ).fallbackToDestructiveMigration().build()
 
     private val dao = db.studioDao()
+
+    val recoverySession = flow {
+        emit(dao.getRecoverySession())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    fun startRecoverySession(sceneId: Long, frameIndex: Int) {
+        val projectId = currentProjectId.value ?: return
+        viewModelScope.launch {
+            dao.saveRecoverySession(RecoverySession(projectId = projectId, sceneId = sceneId, frameIndex = frameIndex))
+        }
+    }
+
+    fun updateRecoverySession(frameIndex: Int) {
+        val session = recoverySession.value ?: return
+        viewModelScope.launch {
+            dao.saveRecoverySession(session.copy(frameIndex = frameIndex, timestamp = System.currentTimeMillis()))
+        }
+    }
+
+    fun clearRecoverySession() {
+        viewModelScope.launch {
+            dao.clearRecoverySession()
+        }
+    }
+
+    fun checkAndShowRecovery(context: android.content.Context) {
+        viewModelScope.launch {
+            val session = dao.getRecoverySession()
+            if (session != null) {
+                // Determine if it was "accidental" - e.g. timestamp is old or we just assume if it exists.
+                // Start the service to show the overlay
+                val intent = android.content.Intent(context, RecoveryService::class.java)
+                if (android.provider.Settings.canDrawOverlays(context)) {
+                    context.startService(intent)
+                }
+            }
+        }
+    }
 
     val projects = dao.getAllProjects().stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
@@ -104,12 +143,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 1", type = TrackType.SCENE))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 2", type = TrackType.SCENE))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 3", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 4", type = TrackType.SCENE))
+            dao.insertTrack(TimelineTrack(projectId = id, name = "Layer 5", type = TrackType.SCENE))
             dao.insertTrack(TimelineTrack(projectId = id, name = "GIF Layer", type = TrackType.GIF))
             dao.insertTrack(TimelineTrack(projectId = id, name = "Audio", type = TrackType.AUDIO))
         }
     }
 
-    fun addScene(projectId: Long, name: String) {
+    fun addScene(projectId: Long, trackId: Long?, name: String) {
         viewModelScope.launch {
             val sequence = scenes.value.size
             val sceneId = dao.insertScene(Scene(projectId = projectId, name = name, sequence = sequence))
@@ -117,16 +158,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             dao.insertFrame(Frame(sceneId = sceneId, sequence = 0))
 
             // Add to timeline
-            val animTrack = tracks.value.find { it.type == TrackType.SCENE }
-            if (animTrack != null) {
+            val targetTrack = tracks.value.find { it.id == trackId && it.type == TrackType.SCENE }
+                ?: tracks.value.find { it.type == TrackType.SCENE }
+            
+            if (targetTrack != null) {
                 val startTime = clips.value
-                    .filter { it.trackId == animTrack.id }
+                    .filter { it.trackId == targetTrack.id }
                     .maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
                 
                 dao.insertClip(TimelineClip(
-                    trackId = animTrack.id,
+                    trackId = targetTrack.id,
                     startTimeMs = startTime,
-                    durationMs = 2000L, // 2 seconds default
+                    durationMs = 2000L,
                     content = sceneId.toString()
                 ))
             }
@@ -174,7 +217,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     fun addFrame() {
         val sceneId = _currentSceneId.value ?: return
         viewModelScope.launch {
-            val sequence = currentFrames.value.size
+            val sequence = dao.getFrameCount(sceneId)
             dao.insertFrame(Frame(sceneId = sceneId, sequence = sequence))
             _selectedFrameIndex.value = sequence
         }

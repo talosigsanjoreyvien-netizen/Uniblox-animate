@@ -55,7 +55,8 @@ data class Frame(
 data class Stroke(
     val points: List<Point>,
     val color: Int,
-    val width: Float
+    val width: Float,
+    val isFill: Boolean = false
 )
 
 @Serializable
@@ -102,6 +103,15 @@ data class TimelineClip(
     val content: String // sceneId or audioUri
 )
 
+@Entity(tableName = "recovery_session")
+data class RecoverySession(
+    @PrimaryKey val id: Int = 1,
+    val projectId: Long,
+    val sceneId: Long,
+    val frameIndex: Int,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 @Dao
 interface StudioDao {
     @Query("SELECT * FROM projects ORDER BY createdAt DESC")
@@ -118,6 +128,9 @@ interface StudioDao {
 
     @Query("SELECT * FROM frames WHERE sceneId = :sceneId ORDER BY sequence ASC")
     fun getFramesByScene(sceneId: Long): Flow<List<Frame>>
+
+    @Query("SELECT COUNT(*) FROM frames WHERE sceneId = :sceneId")
+    suspend fun getFrameCount(sceneId: Long): Int
 
     @Insert
     suspend fun insertFrame(frame: Frame): Long
@@ -139,11 +152,20 @@ interface StudioDao {
 
     @Update
     suspend fun updateClip(clip: TimelineClip)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveRecoverySession(session: RecoverySession)
+
+    @Query("SELECT * FROM recovery_session WHERE id = 1")
+    suspend fun getRecoverySession(): RecoverySession?
+
+    @Query("DELETE FROM recovery_session WHERE id = 1")
+    suspend fun clearRecoverySession()
 }
 
 @Database(
-    entities = [Project::class, Scene::class, Frame::class, TimelineTrack::class, TimelineClip::class],
-    version = 1,
+    entities = [Project::class, Scene::class, Frame::class, TimelineTrack::class, TimelineClip::class, RecoverySession::class],
+    version = 2,
     exportSchema = false
 )
 abstract class StudioDatabase : RoomDatabase() {

@@ -13,6 +13,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioAnimator
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioDashboard
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.StudioViewModel
@@ -29,10 +36,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        // Request overlay permission if needed for the recovery feature
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        }
+
         setContent {
             StudioTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    StudioApp()
+                    val viewModel: StudioViewModel = viewModel()
+                    
+                    LaunchedEffect(Unit) {
+                        viewModel.checkAndShowRecovery(this@MainActivity)
+                    }
+
+                    StudioApp(viewModel)
                 }
             }
         }
@@ -40,18 +63,41 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun StudioApp() {
+fun StudioApp(viewModel: StudioViewModel) {
     val navController = rememberNavController()
-    val viewModel: StudioViewModel = viewModel()
+    val recoverySession by viewModel.recoverySession.collectAsState()
 
+    // Handle Recovery Intent or automatic recovery if "Import" clicked in overlay
+    // Actually, when overlay clicks "Import", it starts MainActivity with RECOVER=true.
+    // In Compose Nav, we can react to this.
+    
     NavHost(navController = navController, startDestination = DashboardRoute) {
         composable<DashboardRoute> {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val activity = context as? MainActivity
+            
             StudioDashboard(
                 viewModel = viewModel,
                 onOpenAnimator = { sceneId ->
                     navController.navigate(AnimatorRoute(sceneId))
                 }
             )
+            
+            LaunchedEffect(activity?.intent) {
+                if (activity?.intent?.getBooleanExtra("RECOVER", false) == true) {
+                    val session = viewModel.recoverySession.value
+                    if (session != null) {
+                        viewModel.selectProject(session.projectId)
+                        viewModel.selectScene(session.sceneId)
+                        viewModel.selectFrame(session.frameIndex)
+                        navController.navigate(AnimatorRoute(session.sceneId))
+                    }
+                    activity.intent.removeExtra("RECOVER")
+                } else if (activity?.intent?.getBooleanExtra("ABANDON", false) == true) {
+                    viewModel.clearRecoverySession()
+                    activity.intent.removeExtra("ABANDON")
+                }
+            }
         }
         composable<AnimatorRoute> { backStackEntry ->
             val route: AnimatorRoute = backStackEntry.toRoute()

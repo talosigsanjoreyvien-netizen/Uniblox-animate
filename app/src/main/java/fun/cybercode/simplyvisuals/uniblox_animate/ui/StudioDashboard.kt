@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawScopeStroke
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +43,9 @@ import coil.compose.AsyncImage
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import android.os.Build
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.filled.Refresh
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.*
 import `fun`.cybercode.simplyvisuals.uniblox_animate.data.Stroke as DrawingStroke
 import `fun`.cybercode.simplyvisuals.uniblox_animate.ui.theme.*
@@ -62,6 +67,17 @@ fun StudioDashboard(
 
     var selectedTrackId by remember { mutableStateOf<Long?>(null) }
     
+    // Auto-create/select project if none
+    var isCreatingInitialProject by remember { mutableStateOf(false) }
+    LaunchedEffect(projects) {
+        if (projects.isEmpty() && !isCreatingInitialProject) {
+            isCreatingInitialProject = true
+            viewModel.createProject("My First Project")
+        } else if (projects.isNotEmpty() && currentProject == null) {
+            viewModel.selectProject(projects.first().id)
+        }
+    }
+
     // Auto-select first track
     LaunchedEffect(tracks) {
         if (selectedTrackId == null && tracks.isNotEmpty()) {
@@ -98,16 +114,17 @@ fun StudioDashboard(
                     viewModel = viewModel,
                     onOpenAnimator = onOpenAnimator,
                     onAddScene = { 
-                        currentProject?.id?.let { viewModel.addScene(it, "scene ${scenes.size + 1}") }
+                        currentProject?.id?.let { viewModel.addScene(it, selectedTrackId, "scene ${scenes.size + 1}") }
                     }
                 )
 
                 // 4. Right Sidebar (Actions)
                 ActionsSidebar(
                     modifier = Modifier.width(sidebarWidth),
+                    tracks = tracks,
                     selectedTrackId = selectedTrackId,
                     onAddScene = {
-                        currentProject?.id?.let { viewModel.addScene(it, "scene ${scenes.size + 1}") }
+                        currentProject?.id?.let { viewModel.addScene(it, selectedTrackId, "scene ${scenes.size + 1}") }
                     },
                     onAddGif = { trackId ->
                         viewModel.addGif(trackId, "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpzeXo3eXpzeXo3eXpzeXo3eXpzeXo3eXpzeXo3eXpzeXo3eXAmZXA9djFfaW50ZXJuYWxfZ2lmX2J5X2lkJmN0PWc/3o7TKVUn7iM8FMEU24/giphy.gif")
@@ -201,6 +218,9 @@ fun MainPreviewArea(
     onAddScene: () -> Unit
 ) {
     val context = LocalContext.current
+    var zoomScale by remember { mutableFloatStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+
     val imageLoader = remember {
         ImageLoader.Builder(context)
             .components {
@@ -220,25 +240,37 @@ fun MainPreviewArea(
             .border(1.dp, White60, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
     ) {
-        if (tracks.isEmpty()) {
+        val activeClips = tracks.mapNotNull { track ->
+            clips.find { it.trackId == track.id && playbackPositionMs >= it.startTimeMs && playbackPositionMs < it.startTimeMs + it.durationMs }
+        }
+
+        if (activeClips.isEmpty()) {
             Text(
-                text = "Adding tracks.....",
-                color = Color.White
+                text = "click a scene to animate...\nor add a scene",
+                color = Color.White,
+                fontSize = 20.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 32.sp,
+                modifier = Modifier.clickable { onAddScene() }
             )
         } else {
             // Render Background or Base
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .aspectRatio(1.6f) // 16:10 for 1050p height
+                    .graphicsLayer(
+                        scaleX = zoomScale,
+                        scaleY = zoomScale,
+                        translationX = panOffset.x,
+                        translationY = panOffset.y
+                    )
                     .background(Color.White, RoundedCornerShape(8.dp))
             ) {
                 // Render Each Layer in Order
-                tracks.indices.forEach { trackIndex ->
-                    val track = tracks[trackIndex]
-                    val activeClip = clips.find { it.trackId == track.id && playbackPositionMs >= it.startTimeMs && playbackPositionMs < it.startTimeMs + it.durationMs }
-                    
-                    if (activeClip != null) {
+                activeClips.forEach { activeClip ->
+                    val track = tracks.find { it.id == activeClip.trackId }
+                    if (track != null) {
                         when (track.type) {
                             TrackType.SCENE -> {
                                 activeClip.content.toLongOrNull()?.let { sceneId ->
@@ -265,6 +297,29 @@ fun MainPreviewArea(
                 }
             }
 
+            // Zoom Controls Overlay (Top Right)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                    .padding(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(onClick = { zoomScale *= 1.2f }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = { zoomScale /= 1.2f }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = { 
+                    zoomScale = 1f
+                    panOffset = Offset.Zero
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Reset Zoom", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
+
             // Play/Pause Overlay
             Box(
                 modifier = Modifier
@@ -272,7 +327,7 @@ fun MainPreviewArea(
                     .clickable { viewModel.togglePlayback() },
                 contentAlignment = Alignment.Center
             ) {
-                if (!isPlaying && tracks.isNotEmpty() && clips.any { playbackPositionMs >= it.startTimeMs && playbackPositionMs < it.startTimeMs + it.durationMs }) {
+                if (!isPlaying && tracks.isNotEmpty()) {
                     Surface(
                         modifier = Modifier.size(80.dp),
                         color = Color.Black.copy(alpha = 0.3f),
@@ -297,27 +352,27 @@ fun FrameView(frame: Frame) {
         try {
             Json.decodeFromString<List<DrawingStroke>>(frame.strokesJson)
         } catch (e: Exception) {
-            emptyList()
+            emptyList<DrawingStroke>()
         }
     }
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        strokes.forEach { stroke ->
+        strokes.forEach { drawingStroke ->
             val path = Path().apply {
-                if (stroke.points.isNotEmpty()) {
-                    moveTo(stroke.points[0].x, stroke.points[0].y)
-                    for (i in 1 until stroke.points.size) {
-                        lineTo(stroke.points[i].x, stroke.points[i].y)
+                if (drawingStroke.points.isNotEmpty()) {
+                    moveTo(drawingStroke.points[0].x, drawingStroke.points[0].y)
+                    for (i in 1 until drawingStroke.points.size) {
+                        lineTo(drawingStroke.points[i].x, drawingStroke.points[i].y)
                     }
                 }
             }
-            val strokeWidth = stroke.width
-            val strokeColor = stroke.color
+            val sw = drawingStroke.width
+            val sc = drawingStroke.color
             drawPath(
                 path = path,
-                color = Color(strokeColor),
+                color = Color(sc),
                 style = DrawScopeStroke(
-                    width = strokeWidth,
+                    width = sw,
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round
                 )
@@ -329,10 +384,13 @@ fun FrameView(frame: Frame) {
 @Composable
 fun ActionsSidebar(
     modifier: Modifier = Modifier,
+    tracks: List<TimelineTrack>,
     selectedTrackId: Long?,
     onAddScene: () -> Unit,
     onAddGif: (Long) -> Unit
 ) {
+    val selectedTrackIndex = tracks.indexOfFirst { it.id == selectedTrackId }
+    
     Column(
         modifier = modifier
             .fillMaxHeight()
@@ -341,15 +399,24 @@ fun ActionsSidebar(
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        ActionButton("add a scene", onAddScene)
-        ActionButton("add a gif", { 
-            selectedTrackId?.let { onAddGif(it) }
-        })
-        ActionButton("add a picture", {})
+        Text(
+            text = if (selectedTrackIndex != -1) "Layer ${selectedTrackIndex + 1} selected" else "no layer selected",
+            color = if (selectedTrackIndex != -1) StudioAccent else Color.Red,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
         
-        if (selectedTrackId == null) {
-            Text("select a layer first!", color = Color.Red, fontSize = 10.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        ActionButton("add a scene") {
+            onAddScene()
         }
+        
+        ActionButton("add a gif") { 
+            selectedTrackId?.let { onAddGif(it) }
+        }
+        
+        ActionButton("add a picture") {}
     }
 }
 
@@ -388,22 +455,25 @@ fun TimelineArea(
     onOpenAnimator: (Long) -> Unit,
     onResizeClip: (Long, Long) -> Unit
 ) {
+    val scrollState = rememberScrollState()
+    val timelineContentWidth = 2000.dp
+
     Row(
         modifier = modifier
             .border(1.dp, White60)
             .padding(8.dp)
     ) {
-        // Play Button Column
+        // 1. Play Button Column
         Column(
             modifier = Modifier
-                .width(100.dp)
+                .width(80.dp)
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             IconButton(
                 onClick = onTogglePlayback,
-                modifier = Modifier.size(72.dp)
+                modifier = Modifier.size(56.dp)
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled,
@@ -415,19 +485,51 @@ fun TimelineArea(
             Text(
                 text = if (isPlaying) "STOP" else "PLAY",
                 color = StudioAccent,
-                fontSize = 12.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
             )
         }
 
         VerticalDivider(color = White60)
 
-        // Tracks Area
-        val scrollState = rememberScrollState()
-        val timelineContentWidth = 2000.dp // Fixed width for now, or calculate based on duration
+        // 2. Numbers Column (Fixed Sidebar)
+        Column(modifier = Modifier.width(40.dp)) {
+            // Space for Ruler header
+            Box(
+                modifier = Modifier
+                    .height(24.dp)
+                    .fillMaxWidth()
+                    .background(White60.copy(alpha = 0.05f)),
+                contentAlignment = Alignment.Center
+            ) {
+                // Empty placeholder for ruler alignment
+            }
+            
+            tracks.forEach { track ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .background(if (selectedTrackId == track.id) StudioAccent.copy(alpha = 0.2f) else Color.Transparent)
+                        .clickable { onSelectTrack(track.id) }
+                        .border(0.5.dp, White60),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "${tracks.indexOf(track) + 1}",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
 
+        VerticalDivider(color = White60)
+
+        // 3. Scrollable Tracks Area
         Column(modifier = Modifier.weight(1f)) {
-            // 1. Time Ruler (Interactive Seeking Area)
+            // Ruler
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -445,9 +547,8 @@ fun TimelineArea(
                             }
                         }
                 ) {
-                    // Time markers
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val stepPx = 100.dp.toPx() // Every 1 second
+                        val stepPx = 100.dp.toPx()
                         for (i in 0..100) {
                             val x = i * stepPx
                             drawLine(
@@ -456,28 +557,18 @@ fun TimelineArea(
                                 end = androidx.compose.ui.geometry.Offset(x, size.height),
                                 strokeWidth = 1.dp.toPx()
                             )
-                            if (i % 5 == 0) {
-                                // Larger marker every 5 seconds
-                                drawLine(
-                                    color = White87,
-                                    start = androidx.compose.ui.geometry.Offset(x, size.height * 0.3f),
-                                    end = androidx.compose.ui.geometry.Offset(x, size.height),
-                                    strokeWidth = 2.dp.toPx()
-                                )
-                            }
                         }
                     }
                 }
             }
 
-            // 2. Clips Area
+            // Clips
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .horizontalScroll(scrollState)
                     .drawWithContent {
                         drawContent()
-                        // Playhead (Visual Only - drawn over content)
                         val x = (playbackPositionMs / 10f).dp.toPx()
                         drawLine(
                             color = StudioAccent,
@@ -489,42 +580,37 @@ fun TimelineArea(
             ) {
                 Column(modifier = Modifier.width(timelineContentWidth).fillMaxHeight()) {
                     tracks.forEach { track ->
-                        Row(
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
-                                .background(if (selectedTrackId == track.id) StudioAccent.copy(alpha = 0.2f) else Color.Transparent)
-                                .clickable { onSelectTrack(track.id) }
+                                .background(if (selectedTrackId == track.id) StudioAccent.copy(alpha = 0.05f) else Color.Transparent)
                                 .border(0.5.dp, White60),
-                            verticalAlignment = Alignment.CenterVertically
+                            contentAlignment = Alignment.CenterStart
                         ) {
-                            Text(
-                                text = "${tracks.indexOf(track) + 1}",
-                                color = White60,
-                                modifier = Modifier.width(30.dp),
-                                textAlign = TextAlign.Center
-                            )
-                            VerticalDivider(color = White60)
-                            
-                            // Track Content
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
-                                val trackClips = clips.filter { it.trackId == track.id }
-                                trackClips.forEach { clip ->
-                                    val sceneName = scenes.find { it.id.toString() == clip.content }?.name ?: "scene"
-                                    TimelineClipView(
-                                        label = sceneName,
-                                        color = if (track.type == TrackType.SCENE) StudioAccent else StudioAudio,
-                                        modifier = Modifier
-                                            .padding(start = (clip.startTimeMs / 10f).dp)
-                                            .width((clip.durationMs / 10f).dp),
-                                        onResize = { deltaMs ->
-                                            val newDuration = (clip.durationMs + deltaMs).coerceAtLeast(100L)
-                                            onResizeClip(clip.id, newDuration)
-                                        }
-                                    ) {
-                                        if (track.type == TrackType.SCENE) {
-                                            clip.content.toLongOrNull()?.let { onOpenAnimator(it) }
-                                        }
+                            val trackClips = clips.filter { it.trackId == track.id }
+                            trackClips.forEach { clip ->
+                                val label = if (track.type == TrackType.SCENE) {
+                                    scenes.find { it.id.toString() == clip.content }?.name ?: "scene"
+                                } else if (track.type == TrackType.GIF) {
+                                    "gif clip"
+                                } else {
+                                    "audio"
+                                }
+                                
+                                TimelineClipView(
+                                    label = label,
+                                    color = if (track.type == TrackType.SCENE) StudioAccent else StudioAudio,
+                                    modifier = Modifier
+                                        .padding(start = (clip.startTimeMs / 10f).dp)
+                                        .width((clip.durationMs / 10f).dp),
+                                    onResize = { deltaMs ->
+                                        val newDuration = (clip.durationMs + deltaMs).coerceAtLeast(100L)
+                                        onResizeClip(clip.id, newDuration)
+                                    }
+                                ) {
+                                    if (track.type == TrackType.SCENE) {
+                                        clip.content.toLongOrNull()?.let { onOpenAnimator(it) }
                                     }
                                 }
                             }
